@@ -51,10 +51,27 @@ started work. `clock=` exists for deterministic testing, not client-supplied tim
 
 Each receipt hashes its sequence, timestamp, previous digest and canonical JSON
 body. Its body contains operation arguments, result and affected row snapshots.
-`verify()` checks the chain and materialized state in one consistent read snapshot.
+`verify()` checks the chain, replays the state machine from an empty ledger, checks
+every intermediate receipt snapshot against the independently reconstructed
+balances, and compares the final accounts, reservations and idempotency cache
+with the database in one consistent read snapshot. A later ordinary operation
+cannot conceal an earlier manually edited balance by writing a new snapshot.
 Keep `verify()['checkpoint']` in separate protected storage. Pass it to
 `verify(checkpoint=...)` or CLI `verify --checkpoint checkpoint.json` on a later
 copy. An older checkpoint allows a longer history but rejects truncation below it.
+
+For an offline reconciliation copy, export `ledger.receipts()` to UTF-8 JSON and
+call `verify_receipts(exported, checkpoint=retained_checkpoint)` from the SDK, or
+run `python -m agentledger verify-receipts receipts.json --checkpoint checkpoint.json`.
+The offline command opens no SQLite file and verifies the same transitions and
+intermediate conservation rules. The checkpoint must contain exactly `seq`
+(nonnegative integer, not bool) and `digest` (lowercase SHA-256 hex); retain it
+independently before a dispute. A self-consistent history rewritten before an
+untrusted checkpoint does not prove authenticity.
+
+中文：可导出 UTF-8 JSON 收据，在没有数据库的环境逐条复算预占、开始、结算、退款和
+过期转换。复算同时检查每层余额，避免“最后一张快照正确”掩盖早期错误；外部保存的
+检查点用于发现历史截断或重写，不能证明提供商收费本身真实。
 
 The chain establishes consistency, not provider truth or signer identity. Local
 OS access is the trust boundary. Direct SQL changes bypass the SDK. Never place
@@ -62,6 +79,25 @@ credentials, prompts, PII or payloads in operation keys/account names. There is 
 pruning API: budget capacity and receipt retention are different responsibilities.
 For backup, quiesce all writers and copy the database, or use SQLite's online
 backup API; copying a live `.db` file without its WAL is unsafe.
+
+## Complexity and failure boundary
+
+For hierarchy depth `d`, a new budget transition checks/updates `O(d)` account
+rows and writes one receipt, permit and/or cache row. Expiration adds one such
+transition for every expired undispatched permit. Account lookups and expiry
+selection use SQLite indexes; transaction lock waiting is bounded by `timeout`.
+A cached retry scans receipts in reverse order, worst-case `O(n)` receipts.
+Full verification takes `O(n*d)` replay work and stores `O(a+r+k)` reconstructed
+accounts, permits and operation keys. Offline JSON import also holds the input
+list in memory; the CLI limits each JSON file to 16 MiB. There is no receipt
+pruning or fixed-size live-ledger claim. The local benchmark measures depth 2.
+
+The tests interrupt a real child process before and after commit, race threads
+and spawned processes, independently sum descendant charges/holds, and audit
+rehashed contradictory snapshots. They do not simulate power-loss behavior of
+every storage device, establish remote exactly-once effects, or turn an externally
+edited database into a trusted admission source. After restore or direct SQL
+maintenance, verify against a protected checkpoint before resuming workers.
 
 ## Replay input
 

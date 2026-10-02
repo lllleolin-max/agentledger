@@ -82,5 +82,29 @@ class ReplayBoundaryRegression(unittest.TestCase):
             self.assertEqual(read_json(path), {"hello": "world"})
 
 
+class ConservationRegression(unittest.TestCase):
+    def test_new_snapshot_cannot_launder_an_old_balance_edit(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "ledger.db"
+            ledger = Ledger(path)
+            ledger.create_account("tenant", 100)
+            ledger.reserve("tenant", 50, key="first")
+            # Simulate accidental manual repair followed by an ordinary operation.
+            with closing(sqlite3.connect(path, isolation_level=None)) as db:
+                db.execute("UPDATE accounts SET held=0")
+            ledger.reserve("tenant", 60, key="second")
+            with self.assertRaises(IntegrityError):
+                ledger.verify()
+
+    def test_invalid_checkpoint_never_behaves_like_no_checkpoint(self):
+        with tempfile.TemporaryDirectory() as folder:
+            ledger = Ledger(Path(folder) / "ledger.db")
+            ledger.create_account("tenant", 100)
+            for checkpoint in ({}, [], False, {"seq": True, "digest": "0" * 64},
+                               {"seq": 0, "digest": "0" * 64, "ignored": 1}):
+                with self.subTest(checkpoint=checkpoint), self.assertRaises(ValueError):
+                    ledger.verify(checkpoint=checkpoint)
+
+
 if __name__ == "__main__":
     unittest.main()

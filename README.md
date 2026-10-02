@@ -80,6 +80,23 @@ python -m agentledger --db costs.db status tenant
 python -m agentledger --db costs.db verify
 ```
 
+Audit a UTF-8 receipt export without the database:
+
+```python
+import json
+from pathlib import Path
+from agentledger import Ledger, verify_receipts
+
+ledger = Ledger("costs.db")
+Path("receipts.json").write_text(json.dumps(ledger.receipts()), encoding="utf-8")
+print(verify_receipts(json.loads(Path("receipts.json").read_text(encoding="utf-8"))))
+```
+
+Or run `python -m agentledger verify-receipts receipts.json`; add
+`--checkpoint checkpoint.json` for a checkpoint retained earlier outside the
+ledger. The auditor reconstructs every state transition and ancestor balance,
+so a later snapshot cannot hide an earlier balance edit.
+
 Use the returned `id` with `start ID --key dispatch-1`, then
 `settle ID 65000 --key settle-1`. `refund ID 10000 --key refund-1` records a confirmed
 refund. `cancel ID --key cancel-1` releases undispatched work. Started work requires

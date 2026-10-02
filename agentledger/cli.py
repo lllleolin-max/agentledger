@@ -7,6 +7,7 @@ import sqlite3
 import sys
 
 from .ledger import BudgetExceeded, Ledger, LedgerError
+from .audit import verify_receipts
 from .replay import DEMO, replay
 
 
@@ -52,6 +53,9 @@ def parser():
     verify = sub.add_parser("verify")
     verify.add_argument("--checkpoint", type=Path, help="JSON object with seq and digest")
     sub.add_parser("receipts", help="export append-only receipts as JSON")
+    audit = sub.add_parser("verify-receipts", help="audit an exported JSON receipt list without opening a database")
+    audit.add_argument("input", type=Path)
+    audit.add_argument("--checkpoint", type=Path, help="externally retained JSON object with seq and digest")
     sub.add_parser("demo", help="run deterministic built-in policy ablation")
     report = sub.add_parser("replay", help="run a supplied workload JSON")
     report.add_argument("workload", type=Path)
@@ -63,6 +67,9 @@ def main(argv=None) -> int:
     try:
         if args.command in ("demo", "replay"):
             result = replay(DEMO if args.command == "demo" else read_json(args.workload))
+        elif args.command == "verify-receipts":
+            result = verify_receipts(read_json(args.input),
+                                    checkpoint=read_json(args.checkpoint) if args.checkpoint else None)
         else:
             ledger = Ledger(args.db)
             if args.command == "account":

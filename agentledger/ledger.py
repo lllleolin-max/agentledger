@@ -145,10 +145,11 @@ class Ledger:
         return dict(row)
 
     def _path(self, db, name: str) -> list[dict]:
-        path = []
+        path, seen = [], set()
         while name is not None:
-            if name in {row['name'] for row in path}:
+            if name in seen:
                 raise IntegrityError("account hierarchy contains a cycle")
+            seen.add(name)
             row = self._account(db, name)
             path.append(row)
             name = row['parent']
@@ -340,34 +341,10 @@ class Ledger:
         Hashes detect edits, not authorship. A database administrator can rewrite
         both history and hashes. Retain checkpoints separately to detect rewrites.
         """
+        from .audit import audit_receipts
         with self._transaction(write=False) as db:
-            previous, seq = ZERO_HASH, 0
-            accounts, reservations, operations = {}, {}, {}
-            checkpoint_seen = checkpoint is None or checkpoint == dict(seq=0, digest=ZERO_HASH)
-            for row in db.execute("SELECT * FROM receipts ORDER BY seq"):
-                seq += 1
-                expected = hashlib.sha256(canonical([row['seq'], row['at'], row['previous'], row['body']]).encode()).hexdigest()
-                if row['seq'] != seq or row['previous'] != previous or row['digest'] != expected:
-                    raise IntegrityError(f"receipt chain mismatch at {seq}")
-                body = json.loads(row['body'])
-                if body['key'] is not None:
-                    key = body['key']
-                    if key in operations:
-                        raise IntegrityError("duplicate idempotency key in receipts")
-                    operations[key] = dict(key=key,
-                        request=canonical(dict(operation=body['operation'], parameters=body['parameters'])),
-                        response=canonical(body['result']))
-                for account in body['accounts']:
-                    accounts[account['name']] = account
-                for reservation in body['reservations']:
-                    reservations[reservation['id']] = reservation
-                previous = row['digest']
-                if checkpoint and row['seq'] == checkpoint['seq']:
-                    if previous != checkpoint['digest']:
-                        raise IntegrityError("checkpoint digest mismatch")
-                    checkpoint_seen = True
-            if not checkpoint_seen:
-                raise IntegrityError("checkpoint is missing (history may be truncated)")
+            summary, accounts, reservations, operations = audit_receipts(
+                (dict(row) for row in db.execute("SELECT * FROM receipts ORDER BY seq")), checkpoint)
             actual_accounts = {r['name']: dict(r) for r in db.execute("SELECT * FROM accounts")}
             actual_reservations = {r['id']: dict(r) for r in db.execute("SELECT * FROM reservations")}
             actual_operations = {r['key']: dict(r) for r in db.execute("SELECT * FROM operations")}
@@ -375,4 +352,4 @@ class Ledger:
                 raise IntegrityError("materialized state differs from receipt history")
             if operations != actual_operations:
                 raise IntegrityError("idempotency cache differs from receipt history")
-            return dict(ok=True, receipts=seq, checkpoint=dict(seq=seq, digest=previous))
+            return summary

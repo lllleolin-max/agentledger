@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agentledger"
+version = "0.1.0"
+description = "Local transactional spending permits and verifiable receipts for agent tools"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+authors = [{name = "lllleolin-max"}]
+keywords = ["agents", "budgets", "sqlite", "ledger", "admission-control"]
+classifiers = ["Programming Language :: Python :: 3", "Operating System :: OS Independent"]
+dependencies = []
+
+[project.scripts]
+agentledger = "agentledger.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["agentledger*"]

@@ -190,6 +190,7 @@ class Ledger:
             now = self._now()
             prior = db.execute("SELECT * FROM operations WHERE key=?", (key,)).fetchone()
             if prior:
+                self._check_cached_receipt(db, key, prior)
                 if prior['request'] != request:
                     raise Conflict("idempotency key was already used with different parameters")
                 response = json.loads(prior['response'])
@@ -203,6 +204,22 @@ class Ledger:
         if response.get('state') == 'denied':
             raise BudgetExceeded(response)
         return response
+
+    @staticmethod
+    def _check_cached_receipt(db, key: str, cached):
+        # Retries are less frequent than admissions. Keep schema v1 portable and
+        # scan receipts on retries rather than requiring SQLite's JSON extension.
+        for row in db.execute("SELECT * FROM receipts ORDER BY seq DESC"):
+            body = json.loads(row['body'])
+            if body['key'] != key:
+                continue
+            expected = hashlib.sha256(canonical([row['seq'], row['at'], row['previous'], row['body']]).encode()).hexdigest()
+            request = canonical(dict(operation=body['operation'], parameters=body['parameters']))
+            if (expected != row['digest'] or request != cached['request']
+                    or canonical(body['result']) != cached['response']):
+                raise IntegrityError("cached operation differs from its receipt")
+            return
+        raise IntegrityError("cached operation has no receipt")
 
     def create_account(self, name: str, ceiling: int, *, currency: str = "USD",
                        parent: str | None = None) -> dict:
@@ -325,7 +342,7 @@ class Ledger:
         """
         with self._transaction(write=False) as db:
             previous, seq = ZERO_HASH, 0
-            accounts, reservations = {}, {}
+            accounts, reservations, operations = {}, {}, {}
             checkpoint_seen = checkpoint is None or checkpoint == dict(seq=0, digest=ZERO_HASH)
             for row in db.execute("SELECT * FROM receipts ORDER BY seq"):
                 seq += 1
@@ -333,6 +350,13 @@ class Ledger:
                 if row['seq'] != seq or row['previous'] != previous or row['digest'] != expected:
                     raise IntegrityError(f"receipt chain mismatch at {seq}")
                 body = json.loads(row['body'])
+                if body['key'] is not None:
+                    key = body['key']
+                    if key in operations:
+                        raise IntegrityError("duplicate idempotency key in receipts")
+                    operations[key] = dict(key=key,
+                        request=canonical(dict(operation=body['operation'], parameters=body['parameters'])),
+                        response=canonical(body['result']))
                 for account in body['accounts']:
                     accounts[account['name']] = account
                 for reservation in body['reservations']:
@@ -346,6 +370,9 @@ class Ledger:
                 raise IntegrityError("checkpoint is missing (history may be truncated)")
             actual_accounts = {r['name']: dict(r) for r in db.execute("SELECT * FROM accounts")}
             actual_reservations = {r['id']: dict(r) for r in db.execute("SELECT * FROM reservations")}
+            actual_operations = {r['key']: dict(r) for r in db.execute("SELECT * FROM operations")}
             if accounts != actual_accounts or reservations != actual_reservations:
                 raise IntegrityError("materialized state differs from receipt history")
+            if operations != actual_operations:
+                raise IntegrityError("idempotency cache differs from receipt history")
             return dict(ok=True, receipts=seq, checkpoint=dict(seq=seq, digest=previous))

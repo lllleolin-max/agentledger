@@ -33,3 +33,25 @@ after restoring a potentially corrupted database; hash consistency is not an
 authorization boundary against database administrators.
 
 Verification: `py -3 -m unittest discover -s tests -v`: **22 tests, OK** (2.686s).
+
+After round 1: `151f138e02c8f1a06d2924e10b370c1e914760af`.
+
+## Round 2 — user identifiers and replay input boundaries
+
+Before: `151f138e02c8f1a06d2924e10b370c1e914760af`.
+Review of the general-purpose replay API found that valid call IDs `x` and
+`start:x` collided with internal dispatch keys. A 200-character session name
+also passed validation but failed after adding the internal prefix. Malformed
+JSON shapes raised uncaught TypeError and unknown policy fields were ignored.
+Added three regressions. After correcting an indentation mistake in the new test
+file, `py -3 -m unittest discover -s tests -p test_review_regressions.py -v`
+on unchanged implementation ran **5 tests, FAILED (failures=1, errors=6)**
+(subtests account for the six errors).
+
+Correction: separate internal operation namespaces and hash user identifiers to
+fixed-width internal keys; preserve human-readable scope labels in reports.
+Validate exact workload/call shapes and bound session/batch/call cardinality before
+creating a database. The CLI reads a bounded 16 MiB UTF-8 JSON input and supports
+a Windows UTF-8 BOM. This fixes general replay inputs, beyond the built-in demo.
+
+Verification: added input-cardinality and CLI JSON/BOM checks; `py -3 -m unittest discover -s tests -q`: **27 tests, OK** (3.382s). Also corrected the setuptools build requirement to >=77.0.3 for SPDX metadata, based on root review; this packaging change is not counted as an independent cycle.

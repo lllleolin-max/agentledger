@@ -79,7 +79,13 @@ backup API; copying a live `.db` file without its WAL is unsafe.
 }
 ```
 
-IDs must be unique across batches. All admissions in a batch precede all its
+IDs must be unique across batches. Input is bounded to 1000 sessions, 1000 batches and 10000 calls;
+the CLI accepts at most 16 MiB of UTF-8 JSON, with an optional BOM. Unknown fields
+are errors, so a misspelled policy setting cannot be silently ignored. Call IDs
+and session names allow 200 characters; internal keys use distinct operation
+namespaces and fixed-length SHA-256 encodings to avoid accidental collisions.
+
+All admissions in a batch precede all its
 settlements. The hierarchical policy uses the real SDK; session-only ablates
 parent links but keeps reservations. Post-hoc checks only already reported spend
 against tenant and session limits, so an overlapping batch can overrun them.

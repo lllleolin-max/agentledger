@@ -10,6 +10,18 @@ from .ledger import BudgetExceeded, Ledger, LedgerError
 from .replay import DEMO, replay
 
 
+def read_json(path: Path):
+    # Read one extra byte to detect oversize input without allocating the file.
+    with path.open("rb") as stream:
+        raw = stream.read(16 * 1024 * 1024 + 1)
+    if len(raw) > 16 * 1024 * 1024:
+        raise ValueError("JSON input exceeds the 16 MiB limit")
+    try:
+        return json.loads(raw.decode("utf-8-sig"))
+    except (RecursionError, UnicodeError) as exc:
+        raise ValueError("JSON input must be UTF-8 with bounded nesting") from exc
+
+
 def parser():
     p = argparse.ArgumentParser(description="Local transactional agent spending permits (integer millionths)")
     p.add_argument("--db", default="agentledger.db", help="SQLite file on a local filesystem")
@@ -50,7 +62,7 @@ def main(argv=None) -> int:
     args = parser().parse_args(argv)
     try:
         if args.command in ("demo", "replay"):
-            result = replay(DEMO if args.command == "demo" else json.loads(args.workload.read_text(encoding="utf-8")))
+            result = replay(DEMO if args.command == "demo" else read_json(args.workload))
         else:
             ledger = Ledger(args.db)
             if args.command == "account":
@@ -72,7 +84,7 @@ def main(argv=None) -> int:
             elif args.command == "expire":
                 result = dict(expired=ledger.expire())
             elif args.command == "verify":
-                result = ledger.verify(checkpoint=json.loads(args.checkpoint.read_text(encoding="utf-8")) if args.checkpoint else None)
+                result = ledger.verify(checkpoint=read_json(args.checkpoint) if args.checkpoint else None)
             else:
                 result = ledger.receipts()
         print(json.dumps(result, indent=2, ensure_ascii=False, sort_keys=True))

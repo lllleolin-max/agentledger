@@ -59,28 +59,29 @@ def identifier(value: str, name: str) -> str:
     return value
 
 
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS accounts (
+SCHEMA = (
+"""CREATE TABLE IF NOT EXISTS accounts (
  name TEXT PRIMARY KEY, parent TEXT REFERENCES accounts(name), currency TEXT NOT NULL,
  ceiling INTEGER NOT NULL CHECK(ceiling>=0), spent INTEGER NOT NULL CHECK(spent>=0),
- held INTEGER NOT NULL CHECK(held>=0));
-CREATE TABLE IF NOT EXISTS reservations (
+ held INTEGER NOT NULL CHECK(held>=0))""",
+"""CREATE TABLE IF NOT EXISTS reservations (
  id TEXT PRIMARY KEY, account TEXT NOT NULL REFERENCES accounts(name),
  amount INTEGER NOT NULL CHECK(amount>0), expires_at INTEGER NOT NULL,
  state TEXT NOT NULL CHECK(state IN ('reserved','started','settled','cancelled','expired')),
  actual INTEGER NOT NULL DEFAULT 0 CHECK(actual>=0),
- refunded INTEGER NOT NULL DEFAULT 0 CHECK(refunded>=0 AND refunded<=actual));
-CREATE INDEX IF NOT EXISTS reservations_expiry ON reservations(state,expires_at);
-CREATE TABLE IF NOT EXISTS operations (
- key TEXT PRIMARY KEY, request TEXT NOT NULL, response TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS receipts (
+ refunded INTEGER NOT NULL DEFAULT 0 CHECK(refunded>=0 AND refunded<=actual))""",
+"CREATE INDEX IF NOT EXISTS reservations_expiry ON reservations(state,expires_at)",
+"""CREATE TABLE IF NOT EXISTS receipts (
  seq INTEGER PRIMARY KEY, at INTEGER NOT NULL, body TEXT NOT NULL,
- previous TEXT NOT NULL, digest TEXT NOT NULL UNIQUE);
-CREATE TRIGGER IF NOT EXISTS receipts_no_update BEFORE UPDATE ON receipts
- BEGIN SELECT RAISE(ABORT,'receipts are append-only'); END;
-CREATE TRIGGER IF NOT EXISTS receipts_no_delete BEFORE DELETE ON receipts
- BEGIN SELECT RAISE(ABORT,'receipts are append-only'); END;
-"""
+ previous TEXT NOT NULL, digest TEXT NOT NULL UNIQUE)""",
+"""CREATE TABLE IF NOT EXISTS operations (
+ key TEXT PRIMARY KEY, request TEXT NOT NULL, response TEXT NOT NULL,
+ receipt_seq INTEGER NOT NULL UNIQUE REFERENCES receipts(seq))""",
+"""CREATE TRIGGER IF NOT EXISTS receipts_no_update BEFORE UPDATE ON receipts
+ BEGIN SELECT RAISE(ABORT,'receipts are append-only'); END""",
+"""CREATE TRIGGER IF NOT EXISTS receipts_no_delete BEFORE DELETE ON receipts
+ BEGIN SELECT RAISE(ABORT,'receipts are append-only'); END""",
+)
 
 
 class Ledger:
@@ -99,11 +100,33 @@ class Ledger:
         self.timeout = timeout
         with self._connection() as db:
             db.execute("PRAGMA journal_mode=WAL")
-            version = db.execute("PRAGMA user_version").fetchone()[0]
-            if version not in (0, 1):
-                raise IntegrityError(f"unsupported database schema {version}")
-            db.executescript(SCHEMA)
-            db.execute("PRAGMA user_version=1")
+            db.execute("BEGIN IMMEDIATE")
+            try:
+                version = db.execute("PRAGMA user_version").fetchone()[0]
+                if version not in (0, 1, 2):
+                    raise IntegrityError(f"unsupported database schema {version}")
+                if version == 0 and db.execute(
+                        "SELECT 1 FROM sqlite_master WHERE type='table' "
+                        "AND name IN ('accounts','reservations','operations','receipts')").fetchone():
+                    raise IntegrityError("unversioned database already contains ledger tables")
+                if version == 1:
+                    self._migrate_v1(db)
+                for statement in SCHEMA:
+                    db.execute(statement)
+                db.execute("PRAGMA user_version=2")
+                db.commit()
+            except BaseException:
+                db.rollback()
+                raise
+
+    def _migrate_v1(self, db):
+        # Audit before trusting a legacy cache or assigning receipt pointers.
+        # DDL, backfill and version marker share the initialization transaction.
+        _, operations = self._verify_db(db, legacy=True)
+        db.execute("ALTER TABLE operations ADD COLUMN receipt_seq INTEGER REFERENCES receipts(seq)")
+        db.executemany("UPDATE operations SET receipt_seq=? WHERE key=?",
+                       ((row['receipt_seq'], key) for key, row in operations.items()))
+        db.execute("CREATE UNIQUE INDEX operations_receipt ON operations(receipt_seq)")
 
     @contextmanager
     def _connection(self):
@@ -173,6 +196,7 @@ class Ledger:
         body = canonical(event)
         digest = hashlib.sha256(canonical([seq, now, previous, body]).encode()).hexdigest()
         db.execute("INSERT INTO receipts VALUES (?,?,?,?,?)", (seq, now, body, previous, digest))
+        return seq
 
     def _expire(self, db, now: int) -> int:
         rows = db.execute("SELECT * FROM reservations WHERE state='reserved' AND expires_at<=? "
@@ -200,27 +224,27 @@ class Ledger:
                 self._expire(db, now)
                 response, account, rid = action(db, now)
                 response['replayed'] = False
-                self._append(db, now, op, params, response, account=account, rid=rid, key=key)
-                db.execute("INSERT INTO operations VALUES (?,?,?)", (key, request, canonical(response)))
+                seq = self._append(db, now, op, params, response, account=account, rid=rid, key=key)
+                db.execute("INSERT INTO operations (key,request,response,receipt_seq) VALUES (?,?,?,?)",
+                           (key, request, canonical(response), seq))
         if response.get('state') == 'denied':
             raise BudgetExceeded(response)
         return response
 
     @staticmethod
     def _check_cached_receipt(db, key: str, cached):
-        # Retries are less frequent than admissions. Keep schema v1 portable and
-        # scan receipts on retries rather than requiring SQLite's JSON extension.
-        for row in db.execute("SELECT * FROM receipts ORDER BY seq DESC"):
+        row = db.execute("SELECT * FROM receipts WHERE seq=?", (cached['receipt_seq'],)).fetchone()
+        if row is None:
+            raise IntegrityError("cached operation has no receipt")
+        try:
             body = json.loads(row['body'])
-            if body['key'] != key:
-                continue
             expected = hashlib.sha256(canonical([row['seq'], row['at'], row['previous'], row['body']]).encode()).hexdigest()
             request = canonical(dict(operation=body['operation'], parameters=body['parameters']))
-            if (expected != row['digest'] or request != cached['request']
+            if (body['key'] != key or expected != row['digest'] or request != cached['request']
                     or canonical(body['result']) != cached['response']):
                 raise IntegrityError("cached operation differs from its receipt")
-            return
-        raise IntegrityError("cached operation has no receipt")
+        except (KeyError, TypeError, ValueError, RecursionError) as exc:
+            raise IntegrityError("cached operation has an invalid receipt") from exc
 
     def create_account(self, name: str, ceiling: int, *, currency: str = "USD",
                        parent: str | None = None) -> dict:
@@ -341,15 +365,21 @@ class Ledger:
         Hashes detect edits, not authorship. A database administrator can rewrite
         both history and hashes. Retain checkpoints separately to detect rewrites.
         """
-        from .audit import audit_receipts
         with self._transaction(write=False) as db:
-            summary, accounts, reservations, operations = audit_receipts(
-                (dict(row) for row in db.execute("SELECT * FROM receipts ORDER BY seq")), checkpoint)
-            actual_accounts = {r['name']: dict(r) for r in db.execute("SELECT * FROM accounts")}
-            actual_reservations = {r['id']: dict(r) for r in db.execute("SELECT * FROM reservations")}
-            actual_operations = {r['key']: dict(r) for r in db.execute("SELECT * FROM operations")}
-            if accounts != actual_accounts or reservations != actual_reservations:
-                raise IntegrityError("materialized state differs from receipt history")
-            if operations != actual_operations:
-                raise IntegrityError("idempotency cache differs from receipt history")
-            return summary
+            return self._verify_db(db, checkpoint=checkpoint)[0]
+
+    @staticmethod
+    def _verify_db(db, *, checkpoint=None, legacy=False):
+        from .audit import audit_receipts
+        summary, accounts, reservations, operations = audit_receipts(
+            (dict(row) for row in db.execute("SELECT * FROM receipts ORDER BY seq")), checkpoint)
+        actual_accounts = {r['name']: dict(r) for r in db.execute("SELECT * FROM accounts")}
+        actual_reservations = {r['id']: dict(r) for r in db.execute("SELECT * FROM reservations")}
+        actual_operations = {r['key']: dict(r) for r in db.execute("SELECT * FROM operations")}
+        expected_operations = ({key: {k: v for k, v in row.items() if k != 'receipt_seq'}
+                                for key, row in operations.items()} if legacy else operations)
+        if accounts != actual_accounts or reservations != actual_reservations:
+            raise IntegrityError("materialized state differs from receipt history")
+        if expected_operations != actual_operations:
+            raise IntegrityError("idempotency cache differs from receipt history")
+        return summary, operations

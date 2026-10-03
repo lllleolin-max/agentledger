@@ -136,7 +136,7 @@ def audit_receipts(receipts, checkpoint=None):
                 if key in operations:
                     raise IntegrityError("duplicate idempotency key")
                 operations[key] = dict(key=key, request=canonical(dict(operation=op, parameters=p)),
-                                       response=canonical(expected))
+                                       response=canonical(expected), receipt_seq=seq)
             elif key is not None:
                 raise IntegrityError("unexpected key on system event")
             if canonical(body['result']) != canonical(expected):

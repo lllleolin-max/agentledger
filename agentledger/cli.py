@@ -109,13 +109,15 @@ def main(argv=None) -> int:
                 result = dict(expired=ledger.expire())
             elif args.command == "verify":
                 result = ledger.verify(checkpoint=read_json(args.checkpoint) if args.checkpoint else None)
-            elif args.jsonl:
+            elif args.command == 'receipts' and args.jsonl:
                 for receipt in ledger.iter_receipts():
                     print(json.dumps(receipt, ensure_ascii=True, sort_keys=True))
                 return 0
             else:
                 result = ledger.receipts()
-        print(json.dumps(result, indent=2, ensure_ascii=False, sort_keys=True))
+        # JSON escapes preserve arbitrary identifiers on legacy Windows pipes.
+        # Never report a committed mutation as failed because stdout lacks a glyph.
+        print(json.dumps(result, indent=2, ensure_ascii=True, sort_keys=True))
         return 0
     except BudgetExceeded as exc:
         print(json.dumps(dict(error=type(exc).__name__, details=exc.result)), file=sys.stderr)

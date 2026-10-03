@@ -108,7 +108,18 @@ class Ledger:
         self.clock = clock or (lambda: int(time.time()))
         self.timeout = timeout
         with self._connection() as db:
-            db.execute("PRAGMA journal_mode=WAL")
+            # Concurrent first openers can race to switch a new file into WAL.
+            # SQLite may return BUSY here without invoking its busy timeout.
+            deadline = time.monotonic() + max(0, self.timeout)
+            while True:
+                try:
+                    db.execute("PRAGMA journal_mode=WAL")
+                    break
+                except sqlite3.OperationalError as exc:
+                    remaining = deadline - time.monotonic()
+                    if getattr(exc, 'sqlite_errorcode', None) != sqlite3.SQLITE_BUSY or remaining <= 0:
+                        raise
+                    time.sleep(min(0.01, remaining))
             db.execute("BEGIN IMMEDIATE")
             try:
                 version = db.execute("PRAGMA user_version").fetchone()[0]

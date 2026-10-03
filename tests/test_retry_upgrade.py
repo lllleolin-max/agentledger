@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import sqlite3
 import tempfile
+import time
 import unittest
 
 from agentledger import BudgetExceeded, IntegrityError, Ledger
@@ -142,6 +143,18 @@ class RetryUpgradeTests(unittest.TestCase):
             return ledger.verify()['receipts']
         with ThreadPoolExecutor(max_workers=8) as pool:
             self.assertEqual(list(pool.map(initialize, range(16))), [1] * 16)
+
+    def test_initialization_lock_timeout_remains_bounded_and_does_not_create_rows(self):
+        with closing(sqlite3.connect(self.path, isolation_level=None)) as blocker:
+            blocker.execute('CREATE TABLE unrelated (value INTEGER)')
+            blocker.execute('BEGIN EXCLUSIVE')
+            start = time.monotonic()
+            with self.assertRaises(sqlite3.OperationalError):
+                Ledger(self.path, timeout=0.05)
+            self.assertLess(time.monotonic() - start, 2)
+            blocker.rollback()
+            self.assertIsNone(blocker.execute(
+                "SELECT name FROM sqlite_master WHERE name='accounts'").fetchone())
 
     def test_redirected_or_missing_receipt_pointer_fails_retry_and_verification(self):
         make_legacy(self.path)

@@ -13,10 +13,10 @@ import sys
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--db', required=True, type=Path)
-    parser.add_argument('--output', required=True, type=Path)
+    parser.add_argument('--output', required=True, type=Path, help='new JSONL file; existing files are never overwritten')
     parser.add_argument('--checkpoint', required=True, type=Path)
     args = parser.parse_args()
-    with args.output.open('wb') as output:
+    with args.output.open('xb') as output:
         subprocess.run([sys.executable, '-m', 'agentledger', '--db', str(args.db),
                         'receipts', '--jsonl'], stdout=output, check=True)
     subprocess.run([sys.executable, '-m', 'agentledger', 'verify-receipts',

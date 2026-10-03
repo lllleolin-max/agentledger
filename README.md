@@ -108,7 +108,8 @@ agentledger verify-receipts receipts.jsonl --jsonl --checkpoint checkpoint.json
 JSONL has no total-file limit; each UTF-8 line is limited to 16 MiB. Audit success
 is reported only after the complete stream and checkpoint pass. Use binary output
 redirection when your shell transcodes native output; [the portable example](examples/stream_audit.py)
-writes UTF-8 bytes directly. The SDK exposes `iter_receipts()` and
+writes UTF-8 bytes directly to a new file and refuses to overwrite existing files.
+The SDK exposes `iter_receipts()` and
 `verify_receipt_stream()`; reconstructed state still consumes memory as the
 number of accounts, permits and operation keys grows.
 

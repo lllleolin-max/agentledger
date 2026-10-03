@@ -6,7 +6,7 @@ from pathlib import Path
 import sqlite3
 import sys
 
-from .ledger import BudgetExceeded, Ledger, LedgerError
+from .ledger import BudgetExceeded, Ledger, LedgerError, unique_object
 from .audit import verify_receipts, verify_receipt_stream
 from .replay import DEMO, replay
 
@@ -18,7 +18,7 @@ def read_json(path: Path):
     if len(raw) > 16 * 1024 * 1024:
         raise ValueError("JSON input exceeds the 16 MiB limit")
     try:
-        return json.loads(raw.decode("utf-8-sig"))
+        return json.loads(raw.decode("utf-8-sig"), object_pairs_hook=unique_object)
     except (RecursionError, UnicodeError) as exc:
         raise ValueError("JSON input must be UTF-8 with bounded nesting") from exc
 
@@ -32,7 +32,8 @@ def iter_jsonl(path: Path):
             if len(raw) > 16 * 1024 * 1024:
                 raise ValueError(f"JSONL line {line_number} exceeds the 16 MiB limit")
             try:
-                yield json.loads(raw.decode('utf-8-sig' if line_number == 1 else 'utf-8'))
+                yield json.loads(raw.decode('utf-8-sig' if line_number == 1 else 'utf-8'),
+                                 object_pairs_hook=unique_object)
             except (RecursionError, UnicodeError, ValueError) as exc:
                 raise ValueError(f"JSONL line {line_number} must contain one bounded UTF-8 JSON object") from exc
 

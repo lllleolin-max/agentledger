@@ -47,9 +47,9 @@ class CountedLedger(Ledger):
     def _connection(self):
         with super()._connection() as db:
             def count():
-                self.instructions += 100
+                self.instructions += 1
                 return 0
-            db.set_progress_handler(count, 100)
+            db.set_progress_handler(count, 1)
             yield db
 
 
@@ -134,6 +134,14 @@ class RetryUpgradeTests(unittest.TestCase):
         ledger = Ledger(self.path)
         self.assertEqual(ledger.receipts(), receipts)
         self.assertEqual(ledger.verify(), before)
+
+    def test_concurrent_initializers_create_one_empty_ledger(self):
+        def initialize(_):
+            ledger = Ledger(self.path)
+            ledger.create_account('tenant', 100)
+            return ledger.verify()['receipts']
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            self.assertEqual(list(pool.map(initialize, range(16))), [1] * 16)
 
     def test_redirected_or_missing_receipt_pointer_fails_retry_and_verification(self):
         make_legacy(self.path)

@@ -6,7 +6,7 @@ import hashlib
 import json
 import re
 
-from .ledger import IntegrityError, ZERO_HASH, canonical, identifier, integer
+from .ledger import IntegrityError, ZERO_HASH, canonical, identifier, integer, unique_object
 
 PARAMETERS = {
     'create_account': {'name', 'ceiling', 'currency', 'parent'},
@@ -55,7 +55,7 @@ def audit_receipts(receipts, checkpoint=None):
             digest = hashlib.sha256(canonical([row['seq'], row['at'], row['previous'], row['body']]).encode()).hexdigest()
             if row['seq'] != seq or row['previous'] != previous or row['digest'] != digest:
                 raise IntegrityError("receipt chain mismatch")
-            body = json.loads(row['body'])
+            body = json.loads(row['body'], object_pairs_hook=unique_object)
             if set(body) != {'operation', 'parameters', 'result', 'key', 'accounts', 'reservations'}:
                 raise IntegrityError("unexpected event fields")
             op, p, now = body['operation'], body['parameters'], row['at']

@@ -47,6 +47,15 @@ def canonical(value) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 
 
+def unique_object(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"duplicate JSON property: {key}")
+        result[key] = value
+    return result
+
+
 def integer(value: int, name: str, minimum: int = 0) -> int:
     if type(value) is not int or not minimum <= value <= MAX_INT:
         raise ValueError(f"{name} must be an integer in [{minimum}, {MAX_INT}]")
@@ -237,7 +246,7 @@ class Ledger:
         if row is None:
             raise IntegrityError("cached operation has no receipt")
         try:
-            body = json.loads(row['body'])
+            body = json.loads(row['body'], object_pairs_hook=unique_object)
             expected = hashlib.sha256(canonical([row['seq'], row['at'], row['previous'], row['body']]).encode()).hexdigest()
             request = canonical(dict(operation=body['operation'], parameters=body['parameters']))
             if (body['key'] != key or expected != row['digest'] or request != cached['request']

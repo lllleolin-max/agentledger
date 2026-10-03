@@ -162,3 +162,12 @@ def verify_receipts(receipts, *, checkpoint: dict | None = None) -> dict:
     if type(receipts) is not list:
         raise ValueError("exported receipts must be a JSON list")
     return audit_receipts(receipts, checkpoint)[0]
+
+
+def verify_receipt_stream(receipts, *, checkpoint: dict | None = None) -> dict:
+    """Audit an iterable without retaining the input history.
+
+    Replay still retains reconstructed accounts, reservations and operation keys.
+    The entire stream must finish successfully before the result is trusted.
+    """
+    return audit_receipts(receipts, checkpoint)[0]

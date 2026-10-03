@@ -356,8 +356,17 @@ class Ledger:
             return self._reservation(db, rid)
 
     def receipts(self) -> list[dict]:
+        return list(self.iter_receipts())
+
+    def iter_receipts(self):
+        """Yield receipts from one read snapshot without retaining the history.
+
+        Exhaust or close the iterator promptly: an open SQLite read snapshot can
+        delay WAL checkpointing. Exported receipts retain their original format.
+        """
         with self._transaction(write=False) as db:
-            return [dict(row) for row in db.execute("SELECT * FROM receipts ORDER BY seq")]
+            for row in db.execute("SELECT * FROM receipts ORDER BY seq"):
+                yield dict(row)
 
     def verify(self, *, checkpoint: dict | None = None) -> dict:
         """Check chain and projections; optionally verify an externally retained tail.

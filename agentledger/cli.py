@@ -7,7 +7,7 @@ import sqlite3
 import sys
 
 from .ledger import BudgetExceeded, Ledger, LedgerError
-from .audit import verify_receipts
+from .audit import verify_receipts, verify_receipt_stream
 from .replay import DEMO, replay
 
 
@@ -21,6 +21,20 @@ def read_json(path: Path):
         return json.loads(raw.decode("utf-8-sig"))
     except (RecursionError, UnicodeError) as exc:
         raise ValueError("JSON input must be UTF-8 with bounded nesting") from exc
+
+
+def iter_jsonl(path: Path):
+    """Bound each receipt line, not the total retained history size."""
+    with path.open('rb') as stream:
+        line_number = 0
+        while raw := stream.readline(16 * 1024 * 1024 + 1):
+            line_number += 1
+            if len(raw) > 16 * 1024 * 1024:
+                raise ValueError(f"JSONL line {line_number} exceeds the 16 MiB limit")
+            try:
+                yield json.loads(raw.decode('utf-8-sig' if line_number == 1 else 'utf-8'))
+            except (RecursionError, UnicodeError, ValueError) as exc:
+                raise ValueError(f"JSONL line {line_number} must contain one bounded UTF-8 JSON object") from exc
 
 
 def parser():
@@ -52,9 +66,11 @@ def parser():
     sub.add_parser("expire")
     verify = sub.add_parser("verify")
     verify.add_argument("--checkpoint", type=Path, help="JSON object with seq and digest")
-    sub.add_parser("receipts", help="export append-only receipts as JSON")
+    receipts = sub.add_parser("receipts", help="export append-only receipts as JSON")
+    receipts.add_argument("--jsonl", action="store_true", help="stream one JSON receipt per line")
     audit = sub.add_parser("verify-receipts", help="audit an exported JSON receipt list without opening a database")
     audit.add_argument("input", type=Path)
+    audit.add_argument("--jsonl", action="store_true", help="stream JSON lines (16 MiB per line)")
     audit.add_argument("--checkpoint", type=Path, help="externally retained JSON object with seq and digest")
     sub.add_parser("demo", help="run deterministic built-in policy ablation")
     report = sub.add_parser("replay", help="run a supplied workload JSON")
@@ -68,8 +84,9 @@ def main(argv=None) -> int:
         if args.command in ("demo", "replay"):
             result = replay(DEMO if args.command == "demo" else read_json(args.workload))
         elif args.command == "verify-receipts":
-            result = verify_receipts(read_json(args.input),
-                                    checkpoint=read_json(args.checkpoint) if args.checkpoint else None)
+            checkpoint = read_json(args.checkpoint) if args.checkpoint else None
+            result = (verify_receipt_stream(iter_jsonl(args.input), checkpoint=checkpoint)
+                      if args.jsonl else verify_receipts(read_json(args.input), checkpoint=checkpoint))
         else:
             ledger = Ledger(args.db)
             if args.command == "account":
@@ -92,6 +109,10 @@ def main(argv=None) -> int:
                 result = dict(expired=ledger.expire())
             elif args.command == "verify":
                 result = ledger.verify(checkpoint=read_json(args.checkpoint) if args.checkpoint else None)
+            elif args.jsonl:
+                for receipt in ledger.iter_receipts():
+                    print(json.dumps(receipt, ensure_ascii=True, sort_keys=True))
+                return 0
             else:
                 result = ledger.receipts()
         print(json.dumps(result, indent=2, ensure_ascii=False, sort_keys=True))

@@ -117,3 +117,69 @@ Actual costs above estimates can overspend and are recorded honestly. The crash
 probe exercises local SQLite transaction recovery, not all hardware power-loss
 failure modes. Hosted Ubuntu/Windows CI has not yet been observed; independent
 scores, adoption, customers and revenue are not asserted by this builder.
+
+## v0.2 reliability and scale
+
+The original three rounds above remain historical records. These are additional
+corrections observed on Windows/Python 3.14.3 on 2026-10-03, not replacements for
+old commits, releases or independent assessments.
+
+Baseline `8db300e3a56bf498e39744da6acf8c0235b79efc` was exported with `git archive`,
+built into an ordinary wheel, installed into a fresh virtual environment, and
+tested with an isolated interpreter importing its site-packages bytes:
+**37 tests, OK** (6.398s). No editable install or source-path injection was used.
+
+### Indexed retry origin and migration
+
+The same oldest-key probe at 252 and 2,502 receipts measured 1,700 and 17,500
+SQLite VM instructions (100-instruction sampling), and median 5.553/13.157 ms.
+A regression comparing histories of 20 and 400 denials failed on that installed
+baseline: **2,800 not <= 300** instructions. This is work-count evidence of a
+history scan; wall-clock values are local observations, not latency guarantees.
+
+Correction `22ce684db3fbd8774dd46c3e6953bcabf167df0d` stores an originating receipt
+sequence in each cache row and validates that single indexed receipt on retries.
+Its ordinary installed wheel ran the same 252/2,502 probe at fewer than 100 VM
+instructions each, with observed median 1.739/4.055 ms. Full source suite:
+**43 tests, OK** (10.466s). New regressions cover legacy byte/checkpoint retention,
+conservative started holds and actual overruns, corrupt legacy cache/projection
+rejection, pointer corruption, concurrent upgrade and a real process exit after
+DDL/backfill but before commit. Migration is one full replay, not a cheap open.
+
+### Retained-history export and Windows output
+
+Independent review generated a schema-v1 history of 12,003 receipts. Its canonical
+UTF-8 CLI export was 28,083,135 bytes and passed the SDK semantic auditor, but its
+own CLI consumer exited 2 with `JSON input exceeds the 16 MiB limit`.
+Correction `2263d03a34445ee562872af39604e7de09febcb4` adds consistent-snapshot
+iteration and a bounded JSONL input stream through the existing semantic replay.
+Six focused tests passed, including a real valid history larger than 16 MiB,
+concurrent append during export, BOM/UTF-8 and line boundaries, malformed tails,
+duplicate operation keys and retained-checkpoint truncation. The growing replay
+maps remain necessary; this does not claim constant memory.
+
+The baseline encoding regression failed in all three strict output streams
+(cp1252, cp936 and ASCII): a Unicode-named account was committed, then the CLI
+returned exit 2 because JSON output could not encode its name. Correction
+`b4ec1b0a515d82ce91d6d06b4ff78da467a00f96` uses JSON Unicode escapes. The same test
+passed with decoded identifiers preserved and one verified committed receipt.
+
+### Ambiguous JSON and concurrent first open
+
+At `b4ec1b0a515d82ce91d6d06b4ff78da467a00f96`, three concrete duplicate-property
+probes failed: a JSONL outer sequence, a rehashed receipt event operation and a
+workload field were silently overwritten. Correction
+`7bc8488c83c98607fa0a879c5d23e88ef9e3107c` rejects duplicate properties in all those
+decoders; **3 focused tests, OK** (0.085s).
+
+A broadened 54-test run at that correction exposed a separate concurrent first
+open race: `PRAGMA journal_mode=WAL` raised `database is locked` on an empty file.
+Concurrent legacy migration had passed and did not cover this cut. Correction
+`78ac6b23280bc9af2e332e26fc5b7a35204d5a3a` retries that SQLite BUSY result within
+a monotonic WAL-switch deadline, without retrying schema/corruption errors or
+weakening lock failures. **8 focused upgrade tests, OK** (6.371s), including
+first-open concurrency and a real exclusive-lock timeout that creates no rows.
+
+The final source suite includes **55 tests**. New release verification must use
+the final versioned Git archive, ordinary wheel and actual console entry point;
+local observations here do not assert hosted CI success or independent scores.

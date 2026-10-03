@@ -97,11 +97,42 @@ Or run `python -m agentledger verify-receipts receipts.json`; add
 ledger. The auditor reconstructs every state transition and ancestor balance,
 so a later snapshot cannot hide an earlier balance edit.
 
+For a retained history larger than 16 MiB, stream JSON lines through the same
+semantic auditor:
+
+```sh
+agentledger --db costs.db receipts --jsonl > receipts.jsonl
+agentledger verify-receipts receipts.jsonl --jsonl --checkpoint checkpoint.json
+```
+
+JSONL has no total-file limit; each UTF-8 line is limited to 16 MiB. Audit success
+is reported only after the complete stream and checkpoint pass. Use binary output
+redirection when your shell transcodes native output; [the portable example](examples/stream_audit.py)
+writes UTF-8 bytes directly. The SDK exposes `iter_receipts()` and
+`verify_receipt_stream()`; reconstructed state still consumes memory as the
+number of accounts, permits and operation keys grows.
+
 Use the returned `id` with `start ID --key dispatch-1`, then
 `settle ID 65000 --key settle-1`. `refund ID 10000 --key refund-1` records a confirmed
 refund. `cancel ID --key cancel-1` releases undispatched work. Started work requires
 `--no-charge` and a reliable confirmation that no charge occurred. All commands
 produce JSON; budget denial exits 3, other handled errors exit 2, success exits 0.
+JSON output escapes Unicode characters, so identifiers survive strict legacy
+Windows encodings. JSON parsers reconstruct the original names.
+
+## Upgrade to v0.2
+
+Back up the local ledger before the first open with v0.2. A schema-v1 database is
+fully audited and upgraded in one transaction; failed or interrupted migration
+preserves its original schema and data. Existing receipt bodies, digests and
+checkpoints remain valid. The migration holds the writer lock while replaying
+history, so quiesce workers for a large ledger. Verify against your retained
+external checkpoint before resuming them. Older v0.1 clients cannot open schema v2.
+
+Durable retries now locate their originating receipt by indexed sequence rather
+than scanning historical receipts. New admissions retain the same ancestor
+accounting and unknown-charge holds. See [the changelog](CHANGELOG.md) and
+[the measured correction record](docs/ITERATIONS.md#v02-reliability-and-scale).
 
 ## Guarantees and boundaries
 
@@ -144,4 +175,4 @@ those products. [Comparison and commercial hypothesis](docs/POSITIONING.md).
 
 MIT licensed, including commercial use. Runtime dependencies: Python standard
 library only. CI runs Ubuntu/Windows × Python 3.11/3.14; a configured workflow is
-not a claim that hosted CI has already run. v0.1 is an early pilot, without an SLA.
+not a claim that hosted CI has already run. v0.2 is an early pilot, without an SLA.

@@ -15,13 +15,38 @@ calls a provider or guesses current prices.
 
 ## Try it in one minute / 一分钟运行
 
-Python 3.11+; on Windows, replace `python` with `py -3`.
+Install from a source checkout with Python 3.11+:
 
 ```sh
-python -m pip install .
-python -m agentledger demo
-python -m unittest discover -s tests -v
+git clone https://github.com/lllleolin-max/agentledger.git
+cd agentledger
 ```
+
+Linux/macOS:
+
+```sh
+python3 -m venv .venv
+.venv/bin/python -m pip install .
+.venv/bin/python -m agentledger demo
+```
+
+Windows PowerShell:
+
+```powershell
+py -3 -m venv .venv
+.venv\Scripts\python.exe -m pip install .
+.venv\Scripts\python.exe -m agentledger demo
+```
+
+In the remaining examples, `python` means this environment's interpreter:
+`.venv/bin/python` on Linux/macOS or `.venv\Scripts\python.exe` on Windows.
+The runtime uses the standard library; source installation may download build
+dependencies. No PyPI release is required for these instructions.
+
+The first run prints a JSON policy comparison and exits `0`; its temporary
+SQLite files are removed afterward. It needs no provider credentials and makes
+no network calls. To run the optional test suite afterward:
+`python -m unittest discover -s tests -v`.
 
 The demo replays overlapping synthetic tool calls through three executable policies:
 
@@ -38,6 +63,10 @@ costs are supplied in advance. `python -m agentledger replay workload.json` acce
 your own batches; see [workload format](docs/OPERATIONS.md#replay-input).
 
 ## Python integration / Python 集成
+
+Start with a **new** `costs.db` for this example. In a running application, create
+budget scopes once, then reopen the ledger and reuse the existing accounts.
+Keep the ledger on local disk and persist operation keys before dispatching work.
 
 ```python
 from agentledger import Ledger, BudgetExceeded
@@ -116,8 +145,10 @@ number of accounts, permits and operation keys grows.
 Use the returned `id` with `start ID --key dispatch-1`, then
 `settle ID 65000 --key settle-1`. `refund ID 10000 --key refund-1` records a confirmed
 refund. `cancel ID --key cancel-1` releases undispatched work. Started work requires
-`--no-charge` and a reliable confirmation that no charge occurred. All commands
-produce JSON; budget denial exits 3, other handled errors exit 2, success exits 0.
+`--no-charge` and a reliable confirmation that no charge occurred.
+Successful commands produce JSON on stdout; handled domain failures produce
+JSON on stderr. Budget denial exits `3`, other handled errors exit `2`, success
+exits `0`; argument-usage errors exit `2` with argparse text on stderr.
 JSON output escapes Unicode characters, so identifiers survive strict legacy
 Windows encodings. JSON parsers reconstruct the original names.
 
